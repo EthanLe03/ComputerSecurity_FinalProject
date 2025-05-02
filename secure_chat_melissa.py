@@ -10,6 +10,7 @@ from Crypto.Signature import DSS
 import tkinter as tk
 from tkinter import scrolledtext, messagebox, ttk
 import time
+import base64
 
 class SecureChatApp:
     def __init__(self, master):
@@ -79,7 +80,9 @@ class SecureChatApp:
         self.derived_key = None
         self.current_key = None
         self.message_count = 0
-        self.message_sequence = 0
+        self.last_rotation = time.time()
+        self.KEY_ROTATION_COUNT = 100  # Rotate after 100 messages
+        self.KEY_ROTATION_TIME = 600   # Rotate every 10 minutes
         self.socket = None
         self.connection = None
         
@@ -88,6 +91,117 @@ class SecureChatApp:
         self.public_key = self.private_key.public_key()
         
         self.setup_password()
+    
+    def derive_key(self, password, nonce):
+        """Derive a key using PBKDF2 with a fixed salt and nonce."""
+        SALT = b'secure_salt'  # Fixed salt for PBKDF2
+        key = PBKDF2(
+            password,
+            SALT + nonce.to_bytes(4, 'big'),
+            dkLen=32,  # AES-256 key size
+            count=100000,
+            hmac_hash_module=SHA256
+        )
+        return key
+    
+    def rotate_key(self):
+        """Rotate the encryption key based on message count or time."""
+        current_time = time.time()
+        
+        # Check if we need to rotate based on message count or time
+        if (self.message_count >= self.KEY_ROTATION_COUNT or 
+            (current_time - self.last_rotation) >= self.KEY_ROTATION_TIME):
+            
+            # Use HKDF to derive new key
+            self.current_key = HKDF(
+                self.derived_key,
+                32,  # AES-256 key size
+                b'key rotation ' + str(self.message_count).encode(),
+                SHA256
+            )
+            
+            # Reset counters
+            self.message_count = 0
+            self.last_rotation = current_time
+            
+            # Notify user
+            self.display_message("System", "Encryption key rotated for security")
+            self.display_message("System", f"Next rotation in {self.KEY_ROTATION_COUNT} messages or {self.KEY_ROTATION_TIME//60} minutes")
+    
+    def encrypt_message(self, plaintext):
+        """Encrypt plaintext using AES in CBC mode."""
+        iv = get_random_bytes(16)
+        cipher = AES.new(self.current_key, AES.MODE_CBC, iv)
+        padded_msg = pad(plaintext.encode(), AES.block_size)
+        ciphertext = cipher.encrypt(padded_msg)
+        return base64.b64encode(iv + ciphertext).decode('utf-8')
+    
+    def decrypt_message(self, b64_ciphertext):
+        """Decrypt ciphertext using AES in CBC mode."""
+        try:
+            data = base64.b64decode(b64_ciphertext)
+            iv = data[:16]
+            ciphertext = data[16:]
+            cipher = AES.new(self.current_key, AES.MODE_CBC, iv)
+            padded_plaintext = cipher.decrypt(ciphertext)
+            plaintext = unpad(padded_plaintext, AES.block_size)
+            return plaintext.decode('utf-8')
+        except Exception as e:
+            self.display_message("System", f"Decryption failed: {str(e)}")
+            return "[Decryption Failed]"
+    
+    def send_message(self, event=None):
+        message = self.msg_entry.get()
+        if not message or not self.connection:
+            return
+        
+        try:
+            # Check for key rotation
+            self.rotate_key()
+            
+            # Encrypt and send the message
+            ciphertext = self.encrypt_message(message)
+            self.connection.sendall(ciphertext.encode('utf-8'))
+            
+            # Increment message count after successful send
+            self.message_count += 1
+            
+            # Display in chat
+            self.display_message("You (encrypted)", ciphertext)
+            self.display_message("You", message)
+            self.msg_entry.delete(0, tk.END)
+            
+        except Exception as e:
+            self.display_message("System", f"Error sending message: {str(e)}")
+    
+    def receive_messages(self):
+        while True:
+            try:
+                # Receive data
+                data = self.connection.recv(4096)
+                if not data:
+                    self.display_message("System", "Connection closed by peer")
+                    break
+                
+                # Decrypt and display the message
+                ciphertext = data.decode('utf-8')
+                plaintext = self.decrypt_message(ciphertext)
+                
+                # Increment message count after successful receive
+                self.message_count += 1
+                
+                # Check for key rotation
+                self.rotate_key()
+                
+                # Display message
+                self.display_message("Peer", plaintext)
+                
+            except ConnectionResetError:
+                self.display_message("System", "Connection lost")
+                break
+            except Exception as e:
+                self.display_message("System", f"Error receiving message: {str(e)}")
+                break
     
     def setup_password(self):
         # Password setup dialog
@@ -153,26 +267,12 @@ class SecureChatApp:
             messagebox.showerror("Error", "Password must contain:\n- At least one uppercase letter\n- At least one lowercase letter\n- At least one number\n- At least one special character")
             return
         
-        # Generate salt (will be exchanged with peer)
-        self.salt = get_random_bytes(16)
-        
-        # Derive master key using PBKDF2
-        self.derived_key = PBKDF2(self.password, self.salt, dkLen=32, 
-                                 count=100000, hmac_hash_module=SHA256)
-        
-        # Generate initial session key using HKDF
-        self.rotate_key()
+        # Derive initial key
+        self.derived_key = self.derive_key(self.password, 0)
+        self.current_key = self.derived_key
         
         self.pwd_window.destroy()
         self.setup_network()
-    
-    def rotate_key(self):
-        # Derive new session key using HKDF
-        if not self.current_key:
-            self.current_key = HKDF(self.derived_key, 32, b'', SHA256)
-        else:
-            self.current_key = HKDF(self.current_key, 32, b'key rotation', SHA256)
-        self.message_count = 0
     
     def setup_network(self):
         # Network setup dialog
@@ -259,9 +359,7 @@ class SecureChatApp:
         self.connection, addr = self.socket.accept()
         self.display_message("System", f"Connected to {addr}")
         
-        # Exchange public keys and salt
-        self.exchange_keys()
-        
+        # Start receiving messages
         threading.Thread(target=self.receive_messages, daemon=True).start()
     
     def connect_to_peer(self):
@@ -273,174 +371,11 @@ class SecureChatApp:
             self.connection.connect((host, port))
             self.display_message("System", f"Connected to {host}:{port}")
             
-            # Exchange public keys and salt
-            self.exchange_keys()
-            
+            # Start receiving messages
             threading.Thread(target=self.receive_messages, daemon=True).start()
             self.net_window.destroy()
         except Exception as e:
             messagebox.showerror("Error", f"Connection failed: {str(e)}")
-    
-    def exchange_keys(self):
-        # Send our public key
-        self.connection.sendall(self.public_key.export_key(format='DER'))
-        
-        # Receive peer's public key
-        peer_key_data = self.connection.recv(91)  # Size of P-256 public key in DER format
-        self.peer_public_key = ECC.import_key(peer_key_data)
-        
-        # Send our salt
-        self.connection.sendall(self.salt)
-        
-        # Receive peer's salt
-        peer_salt = self.connection.recv(16)
-        
-        # Combine salts for key derivation
-        combined_salt = self.salt + peer_salt
-        
-        # Re-derive keys with combined salt
-        self.derived_key = PBKDF2(self.password, combined_salt, dkLen=32,
-                                 count=100000, hmac_hash_module=SHA256)
-        self.rotate_key()
-        
-        # Send confirmation that key exchange is complete
-        self.connection.sendall(b'KEY_EXCHANGE_COMPLETE')
-        
-        # Wait for peer's confirmation with timeout
-        try:
-            confirmation = self.connection.recv(20)
-            if confirmation != b'KEY_EXCHANGE_COMPLETE':
-                self.display_message("System", "Warning: Key exchange confirmation mismatch")
-                # Continue anyway as the keys might still be correct
-        except Exception as e:
-            self.display_message("System", f"Warning: Key exchange confirmation error: {str(e)}")
-            # Continue anyway as the keys might still be correct
-        
-        self.display_message("System", "Key exchange completed")
-    
-    def send_message(self, event=None):
-        message = self.msg_entry.get()
-        if not message or not self.connection:
-            return
-        
-        # Check for key rotation
-        self.message_count += 1
-        if self.message_count >= 100:
-            self.rotate_key()
-            self.display_message("System", "Encryption key rotated for security")
-        
-        # Increment sequence number
-        self.message_sequence += 1
-        
-        # Encrypt the message
-        iv = get_random_bytes(16)
-        cipher = AES.new(self.current_key, AES.MODE_CBC, iv)
-        padded_msg = pad(message.encode(), AES.block_size)
-        ciphertext = cipher.encrypt(padded_msg)
-        
-        # Create message with sequence number and ciphertext length
-        ciphertext_len = len(ciphertext).to_bytes(4, 'big')
-        message_data = self.message_sequence.to_bytes(4, 'big') + iv + ciphertext_len + ciphertext
-        
-        # Sign the message
-        signer = DSS.new(self.private_key, 'fips-186-3')
-        h = SHA256.new(message_data)
-        signature = signer.sign(h)
-        
-        # Create HMAC for integrity (only over message_data and signature)
-        hmac = HMAC.new(self.current_key, digestmod=SHA256)
-        hmac.update(message_data + signature)
-        mac = hmac.digest()
-        
-        # Send sequence + IV + ciphertext length + ciphertext + signature + MAC
-        full_msg = message_data + signature + mac
-        
-        # Send message length first
-        msg_len = len(full_msg)
-        self.connection.sendall(msg_len.to_bytes(4, 'big'))
-        
-        # Then send the actual message
-        self.connection.sendall(full_msg)
-        
-        # Display in chat
-        self.display_message("You (encrypted)", full_msg.hex())
-        self.display_message("You", message)
-        self.msg_entry.delete(0, tk.END)
-    
-    def receive_messages(self):
-        while True:
-            try:
-                # First receive the message length
-                len_data = self.connection.recv(4)
-                if not len_data:
-                    break
-                    
-                msg_len = int.from_bytes(len_data, 'big')
-                
-                # Receive the full message
-                received = bytearray()
-                while len(received) < msg_len:
-                    chunk = self.connection.recv(min(4096, msg_len - len(received)))
-                    if not chunk:
-                        break
-                    received.extend(chunk)
-                
-                if len(received) != msg_len:
-                    self.display_message("System", "ERROR: Incomplete message received")
-                    continue
-                
-                # Parse the message components
-                sequence = int.from_bytes(received[:4], 'big')
-                iv = received[4:20]
-                ciphertext_len = int.from_bytes(received[20:24], 'big')
-                ciphertext = received[24:24+ciphertext_len]
-                signature = received[24+ciphertext_len:-32]
-                mac = received[-32:]
-                
-                # Verify sequence number
-                if sequence <= self.message_sequence:
-                    self.display_message("System", "ERROR: Possible replay attack!")
-                    continue
-                self.message_sequence = sequence
-                
-                # Verify signature
-                message_data = received[:-96]  # Everything except signature and MAC
-                h = SHA256.new(message_data)
-                verifier = DSS.new(self.peer_public_key, 'fips-186-3')
-                try:
-                    verifier.verify(h, signature)
-                except ValueError as e:
-                    # Debug information
-                    self.display_message("System", f"DEBUG: Message data length: {len(message_data)}")
-                    self.display_message("System", f"DEBUG: Signature length: {len(signature)}")
-                    self.display_message("System", f"DEBUG: Public key: {self.peer_public_key.export_key(format='PEM')}")
-                    self.display_message("System", f"DEBUG: Error details: {str(e)}")
-                    self.display_message("System", "ERROR: Message signature verification failed!")
-                    continue
-                
-                # Verify HMAC (only over message_data and signature)
-                hmac = HMAC.new(self.current_key, digestmod=SHA256)
-                hmac.update(message_data + signature)
-                try:
-                    hmac.verify(mac)
-                except ValueError:
-                    self.display_message("System", "ERROR: Message authentication failed!")
-                    continue
-                
-                # Decrypt
-                cipher = AES.new(self.current_key, AES.MODE_CBC, iv)
-                decrypted = unpad(cipher.decrypt(ciphertext), AES.block_size).decode()
-                
-                # Display
-                self.display_message("Peer (encrypted)", received.hex())
-                self.display_message("Peer", decrypted)
-                
-            except ConnectionResetError:
-                self.display_message("System", "Connection lost")
-                break
-            except Exception as e:
-                self.display_message("System", f"Error receiving message: {str(e)}")
-                break
     
     def display_message(self, sender, message):
         self.chat_display.config(state='normal')
