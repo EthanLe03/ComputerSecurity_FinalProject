@@ -153,6 +153,7 @@ class SecureChatApp:
                 plaintext = self.decrypt_message(ciphertext)
 
                 # Display message
+                self.display_message("Peer (encrypted)", ciphertext)
                 self.display_message("Peer", plaintext)
             except Exception as e:
                 self.display_message("System", f"Error receiving message: {str(e)}")
