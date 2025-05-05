@@ -199,7 +199,9 @@ class SecureChatApp:
                 # check for key rotation
                 self.rotate_key()
                 
-                # display message
+                # display both encrypted and decrypted messages
+                
+                self.display_message("Peer (encrypted)", ciphertext)
                 self.display_message("Peer", plaintext)
                 
             except ConnectionResetError:
@@ -210,11 +212,12 @@ class SecureChatApp:
                 break
     
     def setup_password(self):
-        # password setup
+        # password setup dialog
         self.pwd_window = tk.Toplevel(self.master)
         self.pwd_window.title("Set Password")
-        self.pwd_window.geometry('300x150')
+        self.pwd_window.geometry('400x250')  # Increased height to ensure button visibility
         self.pwd_window.configure(bg=self.bg_color)
+        self.pwd_window.resizable(False, False)
         
         # center the window
         self.pwd_window.update_idletasks()
@@ -228,9 +231,13 @@ class SecureChatApp:
         self.pwd_window.transient(self.master)
         self.pwd_window.grab_set()
         
-        # password entry
-        pwd_frame = tk.Frame(self.pwd_window, bg=self.bg_color)
-        pwd_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+        # main frame
+        main_frame = tk.Frame(self.pwd_window, bg=self.bg_color)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+        
+        # password entry frame
+        pwd_frame = tk.Frame(main_frame, bg=self.bg_color)
+        pwd_frame.pack(fill=tk.X, pady=(0, 10))
         
         ttk.Label(
             pwd_frame,
@@ -243,14 +250,34 @@ class SecureChatApp:
             show="*",
             font=('Segoe UI', 10)
         )
-        self.pwd_entry.pack(fill=tk.X, pady=(0, 10))
+        self.pwd_entry.pack(fill=tk.X, pady=(0, 5))
         
-        ttk.Button(
+        # requirements label
+        requirements = "Password must contain:\n- At least 8 characters\n- Uppercase and lowercase letters\n- Numbers and special characters"
+        ttk.Label(
             pwd_frame,
+            text=requirements,
+            style='TLabel',
+            wraplength=350
+        ).pack(pady=(0, 10))
+        
+        # button frame with fixed height
+        btn_frame = tk.Frame(main_frame, bg=self.bg_color, height=40)
+        btn_frame.pack(fill=tk.X, pady=(10, 0))
+        btn_frame.pack_propagate(False)  # Prevent frame from shrinking
+        
+        # OK button
+        ok_btn = ttk.Button(
+            btn_frame,
             text="OK",
             command=self.derive_keys,
-            style='TButton'
-        ).pack(pady=10)
+            style='TButton',
+            width=10  # Fixed width for the button
+        )
+        ok_btn.pack(side=tk.RIGHT, padx=5)
+        
+        # Bind Enter key to OK button
+        self.pwd_entry.bind('<Return>', lambda e: self.derive_keys())
     
     def derive_keys(self):
         self.password = self.pwd_entry.get().encode()
@@ -284,8 +311,9 @@ class SecureChatApp:
         # network setup dialog
         self.net_window = tk.Toplevel(self.master)
         self.net_window.title("Network Setup")
-        self.net_window.geometry('400x200')
+        self.net_window.geometry('500x300')  # Increased size
         self.net_window.configure(bg=self.bg_color)
+        self.net_window.resizable(False, False)  # Prevent resizing
         
         # center the window
         self.net_window.update_idletasks()
@@ -330,6 +358,15 @@ class SecureChatApp:
         )
         self.peer_entry.pack(fill=tk.X, pady=(0, 10))
         
+        # Add example text
+        example_label = ttk.Label(
+            net_frame,
+            text="Example: localhost:12345",
+            style='TLabel',
+            font=('Segoe UI', 8)
+        )
+        example_label.pack(pady=(0, 10))
+        
         # buttons frame
         btn_frame = tk.Frame(net_frame, bg=self.bg_color)
         btn_frame.pack(fill=tk.X, pady=(10, 0))
@@ -339,14 +376,14 @@ class SecureChatApp:
             text="Start Listening",
             command=self.start_listening,
             style='TButton'
-        ).pack(side=tk.LEFT, padx=(0, 5))
+        ).pack(side=tk.LEFT, padx=(0, 5), fill=tk.X, expand=True)
         
         ttk.Button(
             btn_frame,
             text="Connect",
             command=self.connect_to_peer,
             style='TButton'
-        ).pack(side=tk.RIGHT)
+        ).pack(side=tk.RIGHT, fill=tk.X, expand=True)
     
     def start_listening(self):
         port = int(self.port_entry.get())
