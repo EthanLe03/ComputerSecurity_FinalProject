@@ -194,6 +194,7 @@ class SecureChatApp:
                 self.rotate_key()
                 
                 # Display message
+                self.display_message("Peer (encrypted)", ciphertext)
                 self.display_message("Peer", plaintext)
                 
             except ConnectionResetError:
