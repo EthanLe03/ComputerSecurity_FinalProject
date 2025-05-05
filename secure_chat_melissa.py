@@ -17,13 +17,13 @@ class SecureChatApp:
         self.master = master
         master.title("Secure P2P Chat")
         
-        # Configure style
+        # configure style
         self.style = ttk.Style()
         self.style.configure('TButton', padding=5)
         self.style.configure('TEntry', padding=5)
         self.style.configure('TLabel', padding=5)
         
-        # Set colors
+        # set colors
         self.bg_color = '#f0f0f0'
         self.chat_bg = '#ffffff'
         self.entry_bg = '#ffffff'
@@ -33,15 +33,15 @@ class SecureChatApp:
         self.you_color = '#2c7be5'
         self.peer_color = '#27b08b'
         
-        # Configure main window
+        # configure main window
         master.configure(bg=self.bg_color)
         master.geometry('600x500')
         
-        # Create main frame
+        # create main frame
         main_frame = tk.Frame(master, bg=self.bg_color)
         main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
-        # Chat display
+        # chat display
         chat_frame = tk.Frame(main_frame, bg=self.bg_color)
         chat_frame.pack(fill=tk.BOTH, expand=True)
         
@@ -56,7 +56,7 @@ class SecureChatApp:
         )
         self.chat_display.pack(fill=tk.BOTH, expand=True)
         
-        # Input area
+        # input area
         input_frame = tk.Frame(main_frame, bg=self.bg_color)
         input_frame.pack(fill=tk.X, pady=(10, 0))
         
@@ -75,10 +75,10 @@ class SecureChatApp:
         )
         self.send_btn.pack(side=tk.RIGHT)
         
-        # Network and Crypto Setup
+        # network and crypto setup
         self.password = None
         self.derived_key = None
-        self.current_key = None
+        self.curr_key = None
         self.message_count = 0
         self.last_rotation = time.time()
         self.KEY_ROTATION_COUNT = 100  # Rotate after 100 messages
@@ -86,7 +86,7 @@ class SecureChatApp:
         self.socket = None
         self.connection = None
         
-        # Generate ECC key pair for authentication
+        # generate ECC key pair for authentication
         self.private_key = ECC.generate(curve='P-256')
         self.public_key = self.private_key.public_key()
         
@@ -94,7 +94,8 @@ class SecureChatApp:
     
     def derive_key(self, password, nonce):
         """Derive a key using PBKDF2 with a fixed salt and nonce."""
-        SALT = b'secure_salt'  # Fixed salt for PBKDF2
+        SALT = b'secure_salt'  # fixed salt for PBKDF2
+        
         key = PBKDF2(
             password,
             SALT + nonce.to_bytes(4, 'big'),
@@ -102,38 +103,40 @@ class SecureChatApp:
             count=100000,
             hmac_hash_module=SHA256
         )
+        
         return key
     
     def rotate_key(self):
         """Rotate the encryption key based on message count or time."""
-        current_time = time.time()
+        curr_time = time.time()
         
-        # Check if we need to rotate based on message count or time
+        # check if we need to rotate based on message count or time
         if (self.message_count >= self.KEY_ROTATION_COUNT or 
-            (current_time - self.last_rotation) >= self.KEY_ROTATION_TIME):
+            (curr_time - self.last_rotation) >= self.KEY_ROTATION_TIME):
             
-            # Use HKDF to derive new key
-            self.current_key = HKDF(
+            # use HKDF to derive new key
+            self.curr_key = HKDF(
                 self.derived_key,
                 32,  # AES-256 key size
                 b'key rotation ' + str(self.message_count).encode(),
                 SHA256
             )
             
-            # Reset counters
+            # reset counters
             self.message_count = 0
-            self.last_rotation = current_time
+            self.last_rotation = curr_time
             
-            # Notify user
+            # notify user
             self.display_message("System", "Encryption key rotated for security")
             self.display_message("System", f"Next rotation in {self.KEY_ROTATION_COUNT} messages or {self.KEY_ROTATION_TIME//60} minutes")
     
     def encrypt_message(self, plaintext):
         """Encrypt plaintext using AES in CBC mode."""
         iv = get_random_bytes(16)
-        cipher = AES.new(self.current_key, AES.MODE_CBC, iv)
+        cipher = AES.new(self.curr_key, AES.MODE_CBC, iv)
         padded_msg = pad(plaintext.encode(), AES.block_size)
         ciphertext = cipher.encrypt(padded_msg)
+
         return base64.b64encode(iv + ciphertext).decode('utf-8')
     
     def decrypt_message(self, b64_ciphertext):
@@ -142,12 +145,15 @@ class SecureChatApp:
             data = base64.b64decode(b64_ciphertext)
             iv = data[:16]
             ciphertext = data[16:]
-            cipher = AES.new(self.current_key, AES.MODE_CBC, iv)
+            cipher = AES.new(self.curr_key, AES.MODE_CBC, iv)
             padded_plaintext = cipher.decrypt(ciphertext)
             plaintext = unpad(padded_plaintext, AES.block_size)
+         
             return plaintext.decode('utf-8')
+        
         except Exception as e:
             self.display_message("System", f"Decryption failed: {str(e)}")
+        
             return "[Decryption Failed]"
     
     def send_message(self, event=None):
@@ -156,17 +162,17 @@ class SecureChatApp:
             return
         
         try:
-            # Check for key rotation
+            # check for key rotation
             self.rotate_key()
             
-            # Encrypt and send the message
+            # encrypt and send the message
             ciphertext = self.encrypt_message(message)
             self.connection.sendall(ciphertext.encode('utf-8'))
             
-            # Increment message count after successful send
+            # increment message count after successful send
             self.message_count += 1
             
-            # Display in chat
+            # display in chat
             self.display_message("You (encrypted)", ciphertext)
             self.display_message("You", message)
             self.msg_entry.delete(0, tk.END)
@@ -177,23 +183,23 @@ class SecureChatApp:
     def receive_messages(self):
         while True:
             try:
-                # Receive data
+                # receive data
                 data = self.connection.recv(4096)
                 if not data:
                     self.display_message("System", "Connection closed by peer")
                     break
                 
-                # Decrypt and display the message
+                # decrypt and display the message
                 ciphertext = data.decode('utf-8')
                 plaintext = self.decrypt_message(ciphertext)
                 
-                # Increment message count after successful receive
+                # increment message count after successful receive
                 self.message_count += 1
                 
-                # Check for key rotation
+                # check for key rotation
                 self.rotate_key()
                 
-                # Display message
+                # display message
                 self.display_message("Peer", plaintext)
                 
             except ConnectionResetError:
@@ -204,13 +210,13 @@ class SecureChatApp:
                 break
     
     def setup_password(self):
-        # Password setup dialog
+        # password setup
         self.pwd_window = tk.Toplevel(self.master)
         self.pwd_window.title("Set Password")
         self.pwd_window.geometry('300x150')
         self.pwd_window.configure(bg=self.bg_color)
         
-        # Center the window
+        # center the window
         self.pwd_window.update_idletasks()
         width = self.pwd_window.winfo_width()
         height = self.pwd_window.winfo_height()
@@ -218,11 +224,11 @@ class SecureChatApp:
         y = (self.pwd_window.winfo_screenheight() // 2) - (height // 2)
         self.pwd_window.geometry(f'{width}x{height}+{x}+{y}')
         
-        # Make window modal
+        # make window modal
         self.pwd_window.transient(self.master)
         self.pwd_window.grab_set()
         
-        # Password entry
+        # password entry
         pwd_frame = tk.Frame(self.pwd_window, bg=self.bg_color)
         pwd_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
         
@@ -252,12 +258,12 @@ class SecureChatApp:
             messagebox.showerror("Error", "Password cannot be empty")
             return
             
-        # Validate password requirements
+        # validate password requirements
         if len(self.password) < 8:
             messagebox.showerror("Error", "Password must be at least 8 characters long")
             return
             
-        # Check for password complexity
+        # make sure password meets requirements
         has_upper = any(c.isupper() for c in self.password.decode())
         has_lower = any(c.islower() for c in self.password.decode())
         has_digit = any(c.isdigit() for c in self.password.decode())
@@ -267,21 +273,21 @@ class SecureChatApp:
             messagebox.showerror("Error", "Password must contain:\n- At least one uppercase letter\n- At least one lowercase letter\n- At least one number\n- At least one special character")
             return
         
-        # Derive initial key
+        # derive initial key
         self.derived_key = self.derive_key(self.password, 0)
-        self.current_key = self.derived_key
+        self.curr_key = self.derived_key
         
         self.pwd_window.destroy()
         self.setup_network()
     
     def setup_network(self):
-        # Network setup dialog
+        # network setup dialog
         self.net_window = tk.Toplevel(self.master)
         self.net_window.title("Network Setup")
         self.net_window.geometry('400x200')
         self.net_window.configure(bg=self.bg_color)
         
-        # Center the window
+        # center the window
         self.net_window.update_idletasks()
         width = self.net_window.winfo_width()
         height = self.net_window.winfo_height()
@@ -289,15 +295,15 @@ class SecureChatApp:
         y = (self.net_window.winfo_screenheight() // 2) - (height // 2)
         self.net_window.geometry(f'{width}x{height}+{x}+{y}')
         
-        # Make window modal
+        # make window modal
         self.net_window.transient(self.master)
         self.net_window.grab_set()
         
-        # Network setup frame
+        # network setup frame
         net_frame = tk.Frame(self.net_window, bg=self.bg_color)
         net_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
         
-        # Port entry
+        # port entry
         ttk.Label(
             net_frame,
             text="Port to listen on:",
@@ -311,7 +317,7 @@ class SecureChatApp:
         self.port_entry.pack(fill=tk.X, pady=(0, 10))
         self.port_entry.insert(0, "12345")
         
-        # Peer entry
+        # peer entry
         ttk.Label(
             net_frame,
             text="Connect to (host:port):",
@@ -324,7 +330,7 @@ class SecureChatApp:
         )
         self.peer_entry.pack(fill=tk.X, pady=(0, 10))
         
-        # Buttons frame
+        # buttons frame
         btn_frame = tk.Frame(net_frame, bg=self.bg_color)
         btn_frame.pack(fill=tk.X, pady=(10, 0))
         
@@ -359,7 +365,7 @@ class SecureChatApp:
         self.connection, addr = self.socket.accept()
         self.display_message("System", f"Connected to {addr}")
         
-        # Start receiving messages
+        # start receiving messages
         threading.Thread(target=self.receive_messages, daemon=True).start()
     
     def connect_to_peer(self):
@@ -371,7 +377,7 @@ class SecureChatApp:
             self.connection.connect((host, port))
             self.display_message("System", f"Connected to {host}:{port}")
             
-            # Start receiving messages
+            # start receiving messages
             threading.Thread(target=self.receive_messages, daemon=True).start()
             self.net_window.destroy()
         except Exception as e:
@@ -380,7 +386,7 @@ class SecureChatApp:
     def display_message(self, sender, message):
         self.chat_display.config(state='normal')
         
-        # Set color based on sender
+        # set color based on sender
         if sender == "System":
             color = self.system_color
         elif sender == "You":
@@ -388,11 +394,11 @@ class SecureChatApp:
         else:
             color = self.peer_color
         
-        # Insert message with color
+        # insert message with color
         self.chat_display.insert(tk.END, f"{sender}: ", ('tag', sender))
         self.chat_display.insert(tk.END, f"{message}\n")
         
-        # Configure tags for colors
+        # configure tags for colors
         self.chat_display.tag_configure(sender, foreground=color)
         
         self.chat_display.config(state='disabled')
